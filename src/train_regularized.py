@@ -8,9 +8,7 @@ from sklearn.linear_model import RidgeCV, LassoCV
 
 from evaluation import RegressionEvaluator
 
-# -----------------------------------------------------------------------------
-# Configuration & Logging Setup
-# -----------------------------------------------------------------------------
+# Logger setup
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -26,7 +24,7 @@ TEST_SIZE = 0.2
 RANDOM_STATE = 42
 CV_FOLDS = 5
 
-# Define the grid of regularization strengths (lambdas) to test
+# Define the list of lambdas to try
 ALPHAS = [0.001, 0.01, 0.1, 1.0, 10.0, 100.0, 1000.0]
 
 def load_and_split_data(data_path: str, test_size: float, random_state: int):
