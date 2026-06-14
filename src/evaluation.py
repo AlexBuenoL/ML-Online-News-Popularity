@@ -67,11 +67,11 @@ class RegressionEvaluator:
         Prints a formatted report of the evaluated metrics.
         """
         print(f"--- Evaluation Report: {metrics['Model']} ---")
-        print(f"R² Score:      {metrics['R2_Score']:.4f}")
-        print(f"MAE (Log):     {metrics['MAE_Log']:.4f}")
-        print(f"RMSE (Log):    {metrics['RMSE_Log']:.4f}")
+        print(f"R2 Score: {metrics['R2_Score']:.4f}")
+        print(f"MAE (Log): {metrics['MAE_Log']:.4f}")
+        print(f"RMSE (Log): {metrics['RMSE_Log']:.4f}")
         
         if self.is_log_transformed:
-            print(f"MAE (Shares):  {metrics['MAE_Raw']:,.2f}")
+            print(f"MAE (Shares): {metrics['MAE_Raw']:,.2f}")
             print(f"RMSE (Shares): {metrics['RMSE_Raw']:,.2f}")
         print("-" * 40 + "\n")
