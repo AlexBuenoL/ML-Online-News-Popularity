@@ -1,14 +1,15 @@
 import os
+import time
 import logging
 import joblib
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, KFold
 from sklearn.linear_model import Ridge, Lasso
 
 from evaluation import RegressionEvaluator
 
-# Login setup
+# Logging setup
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -22,12 +23,13 @@ MODEL_DIR = "../models/"
 METRICS_DIR = "../metrics/"
 TEST_SIZE = 0.2
 RANDOM_STATE = 42
+N_SPLITS = 5
 
 # Define grid of lambdas
 ALPHAS = [0.001, 0.01, 0.1, 1.0, 10.0, 100.0, 1000.0, 10000.0]
 
 def load_and_split_data(data_path: str, test_size: float, random_state: int):
-    """Loads the dataset and splits the data into train and test."""
+    """Loads the dataset and isolates the test set."""
     logger.info(f"Loading data from {data_path}...")
     df = pd.read_csv(data_path)
 
@@ -35,105 +37,166 @@ def load_and_split_data(data_path: str, test_size: float, random_state: int):
     X = df.drop(columns=[target_col])
     y = df[target_col]
 
+    # Isolate test set
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=test_size, random_state=random_state
     )
     
     return X_train, X_test, y_train, y_test
 
+def execute_cv_for_model(ModelClass, model_name: str, X_train: pd.DataFrame, y_train: pd.Series, evaluator: RegressionEvaluator):
+    """
+    Executes K-Fold CV across all lambdas. 
+    Returns path data (Fold 1) and the optimal model's aggregated CV metrics.
+    """
+    feature_names = X_train.columns.tolist()
+    kf = KFold(n_splits=N_SPLITS, shuffle=True, random_state=RANDOM_STATE)
+    
+    path_metrics = []
+    coef_path = []
+    
+    best_mean_val_r2 = -float('inf')
+    best_alpha = None
+    best_cv_aggregated_metrics = {}
+
+    for alpha in ALPHAS:
+        logger.info(f"[{model_name}] Evaluating lambda = {alpha}...")
+        
+        fold_val_r2 = []
+        fold_metrics_list = []
+        
+        for fold_idx, (train_idx, val_idx) in enumerate(kf.split(X_train)):
+            X_cv_train, X_cv_val = X_train.iloc[train_idx], X_train.iloc[val_idx]
+            y_cv_train, y_cv_val = y_train.iloc[train_idx], y_train.iloc[val_idx]
+            
+            # Initialize model with lambda
+            if model_name == "Lasso":
+                model = ModelClass(alpha=alpha, random_state=RANDOM_STATE, max_iter=20000)
+            else:
+                model = ModelClass(alpha=alpha, random_state=RANDOM_STATE)
+            
+            # Measure training time
+            start_time = time.time()
+            model.fit(X_cv_train, y_cv_train)
+            train_time = time.time() - start_time
+            
+            # Predict
+            train_preds = model.predict(X_cv_train)
+            val_preds = model.predict(X_cv_val)
+            
+            # Evaluate
+            train_metrics = evaluator.evaluate_predictions(y_cv_train.values, train_preds, f"{model_name}_Train")
+            val_metrics = evaluator.evaluate_predictions(y_cv_val.values, val_preds, f"{model_name}_Val")
+            
+            # Add training time for aggregation
+            val_metrics['Training_Time_s'] = train_time
+            fold_metrics_list.append(val_metrics)
+            fold_val_r2.append(val_metrics['R2_Score'])
+            
+            # Extract Fold 0 data for regularization effect analysis
+            if fold_idx == 0:
+                path_metrics.append({'Model': model_name, 'Alpha': alpha, 'Split': 'Train', **train_metrics})
+                path_metrics.append({'Model': model_name, 'Alpha': alpha, 'Split': 'Validation', **val_metrics})
+                
+                coefs = {'Alpha': alpha}
+                coefs.update({feat: coef for feat, coef in zip(feature_names, model.coef_)})
+                coef_path.append(coefs)
+
+        # Aggregate K-Fold metrics for current alpha
+        mean_val_r2 = np.mean(fold_val_r2)
+        
+        # Check if this alpha provides the best cross-validation performance
+        if mean_val_r2 > best_mean_val_r2:
+            best_mean_val_r2 = mean_val_r2
+            best_alpha = alpha
+            
+            # Calculate mean and stdev for all metrics
+            best_cv_aggregated_metrics = {
+                'Model': model_name,
+                'Alpha': alpha,
+                'R2_Mean': np.mean([m['R2_Score'] for m in fold_metrics_list]),
+                'R2_Std': np.std([m['R2_Score'] for m in fold_metrics_list]),
+                'MAE_log_Mean': np.mean([m['MAE_Log'] for m in fold_metrics_list]),
+                'MAE_log_Std': np.std([m['MAE_Log'] for m in fold_metrics_list]),
+                'RMSE_log_Mean': np.mean([m['RMSE_Log'] for m in fold_metrics_list]),
+                'RMSE_log_Std': np.std([m['RMSE_Log'] for m in fold_metrics_list]),
+                'MAE_orig_Mean': np.mean([m['MAE_Raw'] for m in fold_metrics_list]),
+                'MAE_orig_Std': np.std([m['MAE_Raw'] for m in fold_metrics_list]),
+                'RMSE_orig_Mean': np.mean([m['RMSE_Raw'] for m in fold_metrics_list]),
+                'RMSE_orig_Std': np.std([m['RMSE_Raw'] for m in fold_metrics_list]),
+                'Train_Time_Mean': np.mean([m['Training_Time_s'] for m in fold_metrics_list]),
+                'Train_Time_Std': np.std([m['Training_Time_s'] for m in fold_metrics_list])
+            }
+
+    logger.info(f"Optimal {model_name} Alpha found via {N_SPLITS}-Fold CV: {best_alpha} (Val R2: {best_mean_val_r2:.4f})")
+    
+    return path_metrics, coef_path, best_cv_aggregated_metrics, best_alpha
+
 def main():
     os.makedirs(MODEL_DIR, exist_ok=True)
     os.makedirs(METRICS_DIR, exist_ok=True)
 
-    # 1. Data loading
+    # 1. Data Loading
     X_train, X_test, y_train, y_test = load_and_split_data(
         DATA_PATH, TEST_SIZE, RANDOM_STATE
     )
-    feature_names = X_train.columns.tolist()
     evaluator = RegressionEvaluator(is_log_transformed=True)
 
-    # Store regularization paths
-    performance_metrics = []
-    ridge_coef_path = []
-    lasso_coef_path = []
+    logger.info("Starting Regularization CV analysis...")
 
-    best_ridge_val_r2 = -float('inf')
-    best_ridge_model = None
+    # 2. Execute K-Fold CV
+    ridge_path_metrics, ridge_coefs, best_ridge_cv, best_ridge_alpha = execute_cv_for_model(
+        Ridge, "Ridge", X_train, y_train, evaluator
+    )
     
-    best_lasso_val_r2 = -float('inf')
-    best_lasso_model = None
+    lasso_path_metrics, lasso_coefs, best_lasso_cv, best_lasso_alpha = execute_cv_for_model(
+        Lasso, "Lasso", X_train, y_train, evaluator
+    )
 
-    logger.info("Starting Regularization analysis...")
+    # Combine metrics
+    all_path_metrics = pd.DataFrame(ridge_path_metrics + lasso_path_metrics)
 
-    # 2. Iterate over alphas (lambdas)
-    for alpha in ALPHAS:
-        logger.info(f"--- Evaluating lambda = {alpha} ---")
+    # Format the Best CV Metrics
+    df_best_cv = pd.DataFrame([best_ridge_cv, best_lasso_cv])
+    
+    # 3. Retrain on the full dataset and evaluating on test
+    logger.info("Retraining optimal models on entire training set for test evaluation...")
+    
+    # Ridge final
+    final_ridge = Ridge(alpha=best_ridge_alpha, random_state=RANDOM_STATE)
+    final_ridge.fit(X_train, y_train)
+    ridge_test_preds = final_ridge.predict(X_test)
+    ridge_test_metrics = evaluator.evaluate_predictions(y_test.values, ridge_test_preds, f"Ridge (a={best_ridge_alpha})")
+    
+    # Lasso final
+    final_lasso = Lasso(alpha=best_lasso_alpha, random_state=RANDOM_STATE, max_iter=20000)
+    final_lasso.fit(X_train, y_train)
+    lasso_test_preds = final_lasso.predict(X_test)
+    lasso_test_metrics = evaluator.evaluate_predictions(y_test.values, lasso_test_preds, f"Lasso (a={best_lasso_alpha})")
+    
+    df_test_metrics = pd.DataFrame([ridge_test_metrics, lasso_test_metrics])
+    # 4. Export results
+    logger.info("Exporting all metrics and coefficients...")
 
-        # Ridge
-        ridge = Ridge(alpha=alpha, random_state=RANDOM_STATE)
-        ridge.fit(X_train, y_train)
-        
-        # Evaluate train and validation
-        ridge_train_preds = ridge.predict(X_train)
-        ridge_val_preds = ridge.predict(X_test)
-        
-        ridge_train_metrics = evaluator.evaluate_predictions(y_train.values, ridge_train_preds, f"Ridge_Train_a={alpha}")
-        ridge_val_metrics = evaluator.evaluate_predictions(y_test.values, ridge_val_preds, f"Ridge_Val_a={alpha}")
-        
-        # Store metrics and coefficients
-        performance_metrics.append({'Model': 'Ridge', 'Alpha': alpha, 'Split': 'Train', **ridge_train_metrics})
-        performance_metrics.append({'Model': 'Ridge', 'Alpha': alpha, 'Split': 'Validation', **ridge_val_metrics})
-        
-        ridge_coefs = {'Alpha': alpha}
-        ridge_coefs.update({feat: coef for feat, coef in zip(feature_names, ridge.coef_)})
-        ridge_coef_path.append(ridge_coefs)
+    # Regularization effects
+    all_path_metrics = all_path_metrics.loc[:, ~all_path_metrics.columns.duplicated()] 
+    all_path_metrics.to_csv(os.path.join(METRICS_DIR, "regularization_path_metrics.csv"), index=False)
+    pd.DataFrame(ridge_coefs).to_csv(os.path.join(METRICS_DIR, "ridge_coefficient_path.csv"), index=False)
+    pd.DataFrame(lasso_coefs).to_csv(os.path.join(METRICS_DIR, "lasso_coefficient_path.csv"), index=False)
 
-        # Store best model
-        if ridge_val_metrics['R2_Score'] > best_ridge_val_r2:
-            best_ridge_val_r2 = ridge_val_metrics['R2_Score']
-            best_ridge_model = ridge
+    # CV and test results
+    df_best_cv.to_csv(os.path.join(METRICS_DIR, "cv_best_metrics.csv"), index=False)
+    df_test_metrics.to_csv(os.path.join(METRICS_DIR, "test_final_metrics.csv"), index=False)
 
-        # Lasso
-        lasso = Lasso(alpha=alpha, random_state=RANDOM_STATE, max_iter=20000)
-        lasso.fit(X_train, y_train)
-        
-        # Evaluate train and validation
-        lasso_train_preds = lasso.predict(X_train)
-        lasso_val_preds = lasso.predict(X_test)
-        
-        lasso_train_metrics = evaluator.evaluate_predictions(y_train.values, lasso_train_preds, f"Lasso_Train_a={alpha}")
-        lasso_val_metrics = evaluator.evaluate_predictions(y_test.values, lasso_val_preds, f"Lasso_Val_a={alpha}")
-        
-        # Store metrics and coefficients
-        performance_metrics.append({'Model': 'Lasso', 'Alpha': alpha, 'Split': 'Train', **lasso_train_metrics})
-        performance_metrics.append({'Model': 'Lasso', 'Alpha': alpha, 'Split': 'Validation', **lasso_val_metrics})
-        
-        lasso_coefs = {'Alpha': alpha}
-        lasso_coefs.update({feat: coef for feat, coef in zip(feature_names, lasso.coef_)})
-        lasso_coef_path.append(lasso_coefs)
-
-        # Store best model
-        if lasso_val_metrics['R2_Score'] > best_lasso_val_r2:
-            best_lasso_val_r2 = lasso_val_metrics['R2_Score']
-            best_lasso_model = lasso
-
-    # 3. Export results for analysis
-    logger.info("Exporting metrics and coefficients...")
-
-    # Save performance metrics
-    df_perf = pd.DataFrame(performance_metrics)
-    df_perf = df_perf.loc[:, ~df_perf.columns.duplicated()] 
-    df_perf.to_csv(os.path.join(METRICS_DIR, "regularization_path_metrics.csv"), index=False)
-
-    # Save coefficient paths
-    pd.DataFrame(ridge_coef_path).to_csv(os.path.join(METRICS_DIR, "ridge_coefficient_path.csv"), index=False)
-    pd.DataFrame(lasso_coef_path).to_csv(os.path.join(METRICS_DIR, "lasso_coefficient_path.csv"), index=False)
-
-    # Save best model
-    joblib.dump(best_ridge_model, os.path.join(MODEL_DIR, "ridge_optimal.pkl"))
-    joblib.dump(best_lasso_model, os.path.join(MODEL_DIR, "lasso_optimal.pkl"))
+    # C. Save final models
+    joblib.dump(final_ridge, os.path.join(MODEL_DIR, "ridge_optimal.pkl"))
+    joblib.dump(final_lasso, os.path.join(MODEL_DIR, "lasso_optimal.pkl"))
 
     logger.info("Regularized training and evaluation completed successfully.")
+    
+    # Print final test metrics
+    evaluator.print_report(ridge_test_metrics)
+    evaluator.print_report(lasso_test_metrics)
 
 if __name__ == "__main__":
     main()
