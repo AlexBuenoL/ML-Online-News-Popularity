@@ -11,15 +11,12 @@ from sklearn.svm import SVR
 
 from evaluation import RegressionEvaluator
 
-# Logger setup
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger(__name__)
-
-# Config variables
 DATA_PATH = "data/preprocessed.csv"
 MODEL_DIR = "models/"
 METRICS_DIR = "metrics/"
@@ -78,6 +75,8 @@ def main():
         ('svr', SVR())
     ])
 
+    # Define model specifications for different SVR kernels
+    # With better hardware, we would perform a much more exhaustive hyperparameter search
     model_specs = [
         (
             "SVR_Linear",
@@ -111,6 +110,7 @@ def main():
         )
     ]
 
+    # Train and evaluate each model
     all_metrics = []
     for model_name, params, model_path in model_specs:
         logger.info(f"Training {model_name}")
@@ -122,6 +122,7 @@ def main():
         metrics = report_model(model, X_test, y_test, evaluator, model_name, model_path, train_time_seconds)
         all_metrics.append(metrics)
 
+    # Save metrics to CSV
     metrics_path = os.path.join(METRICS_DIR, "model_metrics.csv")
     df_new_metrics = pd.DataFrame(all_metrics)
     if os.path.exists(metrics_path):

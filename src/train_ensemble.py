@@ -42,18 +42,28 @@ PARAM_GRIDS = {
 }
 
 
-def load_data(path: str):
-    logger.info(f"Loading data from {path}...")
-    df = pd.read_csv(path)
+def load_and_split_data(data_path: str, test_size: float, random_state: int):
+    logger.info(f"Loading data from {data_path}...")
+    try:
+        df = pd.read_csv(data_path)
+    except FileNotFoundError:
+        logger.error(f"Dataset not found at {data_path}. Please check the path.")
+        raise
 
-    if "log_shares" not in df.columns:
-        raise ValueError("Missing target column: 'log_shares'")
+    target_col = 'log_shares'
+    if target_col not in df.columns:
+        logger.error(f"Target column '{target_col}' missing from dataset.")
+        raise ValueError(f"Missing target column: {target_col}")
 
-    X = df.drop(columns=["log_shares"])
-    y = df["log_shares"]
+    X = df.drop(columns=[target_col])
+    y = df[target_col]
 
-    logger.info(f"Dataset shape: {X.shape}")
-    return X, y
+    logger.info(f"Splitting data with test_size={test_size} and random_state={random_state}...")
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=random_state
+    )
+    logger.info(f"Train shape: {X_train.shape}, Test shape: {X_test.shape}")
+    return X_train, X_test, y_train, y_test
 
 
 def grid_search_cv(base_model, param_grid: dict, X_train, y_train):
@@ -162,15 +172,7 @@ def main():
     os.makedirs(MODEL_DIR, exist_ok=True)
     os.makedirs(METRICS_DIR, exist_ok=True)
 
-    X, y = load_data(DATA_PATH)
-
-    # Split into train/test sets
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y,
-        test_size=TEST_SIZE,
-        random_state=RANDOM_STATE,
-    )
-    logger.info(f"Train: {X_train.shape} | Test: {X_test.shape}")
+    X_train, X_test, y_train, y_test = load_and_split_data(DATA_PATH, TEST_SIZE, RANDOM_STATE)
 
     base_models = [
         ("RandomForest", RandomForestRegressor(random_state=RANDOM_STATE, n_jobs=-1)),

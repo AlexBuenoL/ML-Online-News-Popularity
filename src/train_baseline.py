@@ -4,19 +4,19 @@ from time import perf_counter
 
 import joblib
 import pandas as pd
+import numpy as np
 
 from sklearn.model_selection import (
     cross_validate,
-    cross_val_predict,
     KFold
 )
+from sklearn.base import clone
 from sklearn.pipeline import Pipeline
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import StandardScaler
 
 from evaluation import RegressionEvaluator
 
-# Logger setup
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -24,7 +24,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Config variables
 DATA_PATH = "data/preprocessed.csv"
 MODEL_DIR = "models/"
 METRICS_DIR = "metrics/"
@@ -33,31 +32,22 @@ CV_FOLDS = 5
 
 
 def load_data(data_path: str):
-    """
-    Loads the dataset.
-    """
     logger.info(f"Loading data from {data_path}...")
-
     try:
         df = pd.read_csv(data_path)
     except FileNotFoundError:
-        logger.error(f"Dataset not found at {data_path}.")
+        logger.error(f"Dataset not found at {data_path}. Please check the path.")
         raise
 
-    target_col = "log_shares"
-
+    target_col = 'log_shares'
     if target_col not in df.columns:
-        raise ValueError(
-            f"Target column '{target_col}' missing from dataset."
-        )
+        logger.error(f"Target column '{target_col}' missing from dataset.")
+        raise ValueError(f"Missing target column: {target_col}")
 
     X = df.drop(columns=[target_col])
     y = df[target_col]
 
-    logger.info(
-        f"Dataset loaded. Shape: {X.shape}"
-    )
-
+    logger.info(f"Data loaded successfully. Shape: {df.shape}")
     return X, y
 
 
@@ -68,20 +58,13 @@ def evaluate_with_cross_validation(
     cv_folds,
     random_state
 ):
-    """
-    Runs K-Fold CV on the full dataset and computes metrics
-    both in log space and original shares space.
-    """
 
-    from sklearn.base import clone
-    import numpy as np
-
+    # Run cross-validation
     cv = KFold(
         n_splits=cv_folds,
         shuffle=True,
         random_state=random_state
     )
-
     results = cross_validate(
         model,
         X,
@@ -103,6 +86,7 @@ def evaluate_with_cross_validation(
     mae_shares_scores = []
     rmse_shares_scores = []
 
+    # Evaluate each fold for raw-space metrics
     for train_idx, test_idx in cv.split(X):
 
         X_train = X.iloc[train_idx]
@@ -133,28 +117,18 @@ def evaluate_with_cross_validation(
     metrics = {
         "Model": "OLS_Baseline",
         "CV_Folds": cv_folds,
-
-        # Log-space metrics
         "CV_R2_Mean": results["test_r2"].mean(),
         "CV_R2_Std": results["test_r2"].std(),
-
         "CV_MAE_Mean": -results["test_mae"].mean(),
         "CV_MAE_Std": results["test_mae"].std(),
-
         "CV_RMSE_Mean": -results["test_rmse"].mean(),
         "CV_RMSE_Std": results["test_rmse"].std(),
-
-        # Shares-space metrics
         "CV_MAE_Shares_Mean": np.mean(mae_shares_scores),
         "CV_MAE_Shares_Std": np.std(mae_shares_scores),
-
         "CV_RMSE_Shares_Mean": np.mean(rmse_shares_scores),
         "CV_RMSE_Shares_Std": np.std(rmse_shares_scores),
-
-        # Timing
         "CV_Fit_Time_Mean": results["fit_time"].mean(),
         "CV_Fit_Time_Std": results["fit_time"].std(),
-
         "CV_Score_Time_Mean": results["score_time"].mean(),
         "CV_Score_Time_Std": results["score_time"].std(),
     }
@@ -173,6 +147,8 @@ def main():
         ("regressor", LinearRegression())
     ])
 
+    # Given that there is no hyperparameter tuning for OLS, 
+    # we can directly evaluate with cross-validation over the entire dataset.
     logger.info(
         f"Running {CV_FOLDS}-fold CV on the full dataset..."
     )
@@ -189,27 +165,23 @@ def main():
 
     elapsed_time = perf_counter() - start_time
 
-
-    # --------------------------------------------------
-    # Logging
-    # --------------------------------------------------
     logger.info(
-        "CV Results - "
-        f"R2: {metrics['CV_R2_Mean']:.4f} +/- {metrics['CV_R2_Std']:.4f} | "
-        f"MAE(Log): {metrics['CV_MAE_Mean']:.4f} +/- {metrics['CV_MAE_Std']:.4f} | "
-        f"RMSE(Log): {metrics['CV_RMSE_Mean']:.4f} +/- {metrics['CV_RMSE_Std']:.4f} | "
-        f"Fit Time: {metrics['CV_Fit_Time_Mean']:.4f} +/- {metrics['CV_Fit_Time_Std']:.4f} | "
-        f"MAE (Shares): {metrics['CV_MAE_Shares_Mean']:.4f} +/- {metrics['CV_MAE_Shares_Std']:.4f} | "
-        f"RMSE (Shares): {metrics['CV_RMSE_Shares_Mean']:.4f} +/- {metrics['CV_RMSE_Shares_Std']:.4f}"
+        f"Cross-validation completed in {elapsed_time:.2f} seconds."
     )
 
+    # Log the cross-validation results
     logger.info(
-        "Training final model on the full dataset..."
+        "CV Results OLS Baseline:\n"
+        f"R2: {metrics['CV_R2_Mean']:.4f} +/- {metrics['CV_R2_Std']:.4f}\n"
+        f"MAE(Log): {metrics['CV_MAE_Mean']:.4f} +/- {metrics['CV_MAE_Std']:.4f}\n"
+        f"RMSE(Log): {metrics['CV_RMSE_Mean']:.4f} +/- {metrics['CV_RMSE_Std']:.4f}\n"
+        f"MAE (Shares): {metrics['CV_MAE_Shares_Mean']:.4f} +/- {metrics['CV_MAE_Shares_Std']:.4f}\n"
+        f"RMSE (Shares): {metrics['CV_RMSE_Shares_Mean']:.4f} +/- {metrics['CV_RMSE_Shares_Std']:.4f}\n"
+        f"Fit Time: {metrics['CV_Fit_Time_Mean']:.4f} +/- {metrics['CV_Fit_Time_Std']:.4f}\n"
     )
 
+    # Save best model trained on the entire dataset
     model.fit(X, y)
-
-    metrics["Train_Time_Seconds"] = elapsed_time
 
     model_path = os.path.join(
         MODEL_DIR,
@@ -238,9 +210,7 @@ def main():
         f"Metrics saved to {metrics_path}"
     )
 
-    # --------------------------------------------------
-    # Coefficients
-    # --------------------------------------------------
+    # Coefficients and intercept logging
     coefficients = model.named_steps["regressor"].coef_
     intercept = model.named_steps["regressor"].intercept_
 
@@ -255,11 +225,9 @@ def main():
 
     logger.info(f"Intercept: {intercept:.6f}")
 
-    logger.info("Top 5 Coefficients:")
-
     logger.info(
-        "\n%s",
-        coef_df.head(5).to_string(index=False)
+        "Top 5 Coefficients:\n"
+        f"\n{coef_df.head(5).to_string(index=False)}"
     )
 
     logger.info(
