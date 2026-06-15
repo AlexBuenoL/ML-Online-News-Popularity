@@ -18,9 +18,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Config variables
-DATA_PATH = "../data/preprocessed.csv"
-MODEL_DIR = "../models/"
-METRICS_DIR = "../metrics/"
+DATA_PATH = "data/preprocessed.csv"
+MODEL_DIR = "models/"
+METRICS_DIR = "metrics/"
 TEST_SIZE = 0.2
 RANDOM_STATE = 42
 N_SPLITS = 5
