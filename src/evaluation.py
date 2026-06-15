@@ -70,6 +70,17 @@ class RegressionEvaluator:
         print(f"R2 Score: {metrics['R2_Score']:.4f}")
         print(f"MAE (Log): {metrics['MAE_Log']:.4f}")
         print(f"RMSE (Log): {metrics['RMSE_Log']:.4f}")
+
+        if "Train_Time_Seconds" in metrics:
+            print(f"Training Time: {metrics['Train_Time_Seconds']:.2f} seconds")
+
+        if "Grid_Search_Time_Seconds" in metrics:
+            print(f"Grid Search Time: {metrics['Grid_Search_Time_Seconds']:.2f} seconds")
+
+        if "CV_R2_Mean" in metrics:
+            print(f"CV R2: {metrics['CV_R2_Mean']:.4f} +/- {metrics['CV_R2_Std']:.4f}")
+            print(f"CV MAE: {metrics['CV_MAE_Mean']:.4f} +/- {metrics['CV_MAE_Std']:.4f}")
+            print(f"CV RMSE: {metrics['CV_RMSE_Mean']:.4f} +/- {metrics['CV_RMSE_Std']:.4f}")
         
         if self.is_log_transformed:
             print(f"MAE (Shares): {metrics['MAE_Raw']:,.2f}")
